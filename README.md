@@ -14,7 +14,7 @@ cargo install smart-commit
 - モデルが事前にpull済みであること
 
 ```bash
-ollama pull mistral   # デフォルト
+ollama pull gemma4:e2b   # デフォルト
 # または
 ollama pull llama3.2
 ```
@@ -45,7 +45,7 @@ sc --lang en
 
 | フラグ | 短縮 | デフォルト | 説明 |
 |---|---|---|---|
-| `--model` | `-m` | `mistral` | Ollamaモデル名 |
+| `--model` | `-m` | `gemma4:e2b` | Ollamaモデル名 |
 | `--lang` | `-l` | `ja` | メッセージ言語 |
 | `--no-push` | - | false | pushをスキップ |
 | `--interactive` | `-i` | false | 確認プロンプト |
