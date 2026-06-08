@@ -1,0 +1,25 @@
+[package]
+name = "smart-commit"
+version = "0.1.0"
+edition = "2021"
+description = "Ollamaでgitコミットメッセージを自動生成してpushするCLIツール"
+license = "MIT"
+repository = "https://github.com/yourname/smart-commit"
+keywords = ["git", "ollama", "commit", "ai"]
+categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "sc"
+path = "src/main.rs"
+
+[dependencies]
+anyhow     = "1"
+clap       = { version = "4", features = ["derive"] }
+serde      = { version = "1", features = ["derive"] }
+ureq       = { version = "2", features = ["json"] }
+libc       = "0.2"
+
+[profile.release]
+strip = true
+opt-level = "z"
+lto = true
