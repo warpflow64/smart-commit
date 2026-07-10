@@ -270,8 +270,12 @@ fn main() -> Result<()> {
     // クリーンアップを保証するためにクロージャで囲む
     let result = run(&cli, &diff);
 
+    // モデルのアンロードは、サーバーを自前で起動したかどうかに関わらず必ず行う。
+    // (Ollama.appなど既に起動していたサーバーの場合、サーバー自体は落とさないが
+    // モデルがメモリに残り続けるのを防ぐため)
+    unload_model(&cli.model);
+
     if let Some(child) = ollama_child {
-        unload_model(&cli.model);
         stop_ollama(child);
     }
 
