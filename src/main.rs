@@ -3,6 +3,7 @@ use clap::Parser;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{self, Write},
+    os::unix::process::CommandExt,
     process::{Child, Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
@@ -46,12 +47,15 @@ struct Cli {
 
 const OLLAMA_BASE: &str = "http://localhost:11434";
 const STARTUP_TIMEOUT_SECS: u64 = 30;
+const SHUTDOWN_TIMEOUT_SECS: u64 = 10;
 
 #[derive(Serialize)]
 struct GenerateRequest<'a> {
     model: &'a str,
     prompt: String,
     stream: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    keep_alive: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -72,6 +76,11 @@ fn start_ollama() -> Result<Child> {
         .arg("serve")
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        // 自身を新しいプロセスグループのリーダーにする。
+        // ollama serve はモデルロード用に別プロセス(runner)を子として
+        // 起動するため、終了時はグループごとkillしないと孤立して
+        // メモリ(モデル)が解放されないまま残ることがある。
+        .process_group(0)
         .spawn()
         .context("ollama の起動に失敗しました。インストールされていますか？")?;
 
@@ -84,6 +93,57 @@ fn start_ollama() -> Result<Child> {
         sleep(Duration::from_millis(200));
     }
     bail!("Ollama起動がタイムアウトしました ({STARTUP_TIMEOUT_SECS}秒)");
+}
+
+/// モデルをOllamaのメモリから即座にアンロードする(keep_alive: 0)。
+/// サーバープロセスをkillするだけではrunnerサブプロセスが残ることがあるため、
+/// APIレベルで明示的に解放してからプロセスを終了させる。
+fn unload_model(model: &str) {
+    let req = GenerateRequest {
+        model,
+        prompt: String::new(),
+        stream: false,
+        keep_alive: Some(0),
+    };
+
+    let _ = ureq::post(&format!("{}/api/generate", OLLAMA_BASE))
+        .timeout(Duration::from_secs(10))
+        .send_json(&req);
+}
+
+/// Ollamaサーバーを確実に終了させる。
+/// プロセスグループへSIGTERMを送り、一定時間待っても終了しなければ
+/// SIGKILLで強制終了する。
+fn stop_ollama(mut child: Child) {
+    eprintln!("[sc] Ollama終了中...");
+    let pgid = child.id() as i32;
+
+    unsafe {
+        libc::kill(-pgid, libc::SIGTERM);
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(SHUTDOWN_TIMEOUT_SECS);
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => {
+                eprintln!("[sc] Ollama終了完了");
+                return;
+            }
+            Ok(None) => {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                sleep(Duration::from_millis(200));
+            }
+            Err(_) => return,
+        }
+    }
+
+    eprintln!("[sc] Ollamaが終了しないため強制終了(SIGKILL)します");
+    unsafe {
+        libc::kill(-pgid, libc::SIGKILL);
+    }
+    let _ = child.wait();
 }
 
 fn generate_message(model: &str, diff: &str, lang: &str) -> Result<String> {
@@ -107,6 +167,7 @@ fn generate_message(model: &str, diff: &str, lang: &str) -> Result<String> {
         model,
         prompt,
         stream: false,
+        keep_alive: None,
     };
 
     let resp: GenerateResponse = ureq::post(&format!("{}/api/generate", OLLAMA_BASE))
@@ -209,10 +270,9 @@ fn main() -> Result<()> {
     // クリーンアップを保証するためにクロージャで囲む
     let result = run(&cli, &diff);
 
-    if let Some(mut child) = ollama_child {
-        eprintln!("[sc] Ollama終了中...");
-        unsafe { libc::kill(child.id() as i32, libc::SIGTERM); }
-        let _ = child.wait();
+    if let Some(child) = ollama_child {
+        unload_model(&cli.model);
+        stop_ollama(child);
     }
 
     result
